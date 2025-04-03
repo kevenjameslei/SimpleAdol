@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>KLine Chart - Vue + TradingView</title>
+  <script src="https://cdn.jsdelivr.net/npm/vue@3.4.15/dist/vue.global.prod.js"></script>
+  <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      font-family: sans-serif;
+    }
+    #app {
+      width: 100%;
+      height: 95%;
+      display: flex;
+      flex-direction: column;
+    }
+    #header {
+      padding: 12px;
+      background-color: #1e88e5;
+      color: white;
+      font-size: 20px;
+      font-weight: bold;
+      text-align: center;
+    }
+    #toolbar {
+      padding: 10px;
+      background-color: #f5f5f5;
+      border-bottom: 1px solid #ddd;
+      position: relative;
+    }
+    #datapanel {
+      padding: 8px 12px;
+      background-color: #fffdf0;
+      border-top: 1px solid #ddd;
+      font-size: 13px;
+      color: #222;
+    }
+    #chart-container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+    #chart {
+      flex: 1;
+    }
+    input {
+      padding: 5px;
+      margin-right: 10px;
+    }
+    button {
+      padding: 6px 12px;
+    }
+    .float-box {
+      position: absolute;
+      top: 40px;
+      left: 150px;
+      background-color: white;
+      border: 1px solid #ccc;
+      padding: 4px 8px;
+      font-size: 12px;
+      color: #333;
+      box-shadow: 0 0 5px rgba(0,0,0,0.1);
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="header">K线图展示</div>
+    <div id="toolbar">
+      <label for="symbol">股票代码：</label>
+      <input id="symbol" v-model="inputSymbol" @input="showFloat = true" @keyup.enter="handleEnter" placeholder="输入股票代码" />
+      <button @click="loadData">查询</button>
+      <div class="float-box" v-if="showFloat">{{ inputSymbol }}</div>
+    </div>
+    <div id="chart-container">
+      <div id="chart"></div>
+      <div id="datapanel" v-if="selected">
+        股票：{{ fullSymbolDisplay }}｜
+        日期：{{ selected.time }}，
+        开：{{ selected.open }}，高：{{ selected.high }}，低：{{ selected.low }}，收：{{ selected.close }}，
+        涨跌幅：{{ percentChange }}%，
+        成交量：{{ selected.volume || '—' }}
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const { createApp, ref, computed, onMounted, watch } = Vue;
+
+    createApp({
+      setup() {
+        const inputSymbol = ref("");
+        const fullSymbol = ref("");
+        const klineData = ref([]);
+        const selectedIndex = ref(-1);
+        const selected = ref(null);
+        const showFloat = ref(false);
+        const limit = ref(2);
+        let candleSeries;
+
+        function mapKBarList(rawList) {
+          return rawList
+            .filter(item => item.tradeDate && item.openPrice != null && item.closePrice != null)
+            .map(item => ({
+              time: item.tradeDate.split('T')[0],
+              open: Number(item.openPrice),
+              high: Number(item.highPrice),
+              low: Number(item.lowPrice),
+              close: Number(item.closePrice),
+              volume: Number(item.volumn),
+              amount: Number(item.amount),
+              change: Number(item.change),
+              percentChange: Number(item.percent_Change),
+              preClose: Number(item.preClosePrice),
+              id: item.id,
+            }))
+            .sort((a, b) => new Date(a.time) - new Date(b.time));
+        }
+
+        const getFullSymbol = (code) => {
+          if (!code || code.length < 1) return code;
+          const prefix = code[0];
+          if (prefix === '6') return code + '.SH';
+          if (prefix === '8') return code + '.BJ';
+          if (prefix === '0' || prefix === '3') return code + '.SZ';
+          return code;
+        };
+
+        const fullSymbolDisplay = computed(() => fullSymbol.value || getFullSymbol(inputSymbol.value));
+
+        const percentChange = computed(() => {
+          if (!selected.value) return '—';
+          const { open, close } = selected.value;
+          if (open === 0 || open === undefined || close === undefined) return '—';
+          return ((close - open) / open * 100).toFixed(2);
+        });
+
+        const loadData = async (append = false, direction = 'right') => {
+          fullSymbol.value = getFullSymbol(inputSymbol.value);
+          if (!fullSymbol.value) return;
+
+          let boundaryDate = null;
+          if (append && klineData.value.length > 0) {
+            boundaryDate = direction === 'left'
+              ? klineData.value[0].time
+              : klineData.value[klineData.value.length - 1].time;
+          }
+
+          const url = new URL(`/api/kline/${fullSymbol.value}`, window.location.origin);
+          url.searchParams.set("period", "1d");
+          url.searchParams.set("limit", limit.value);
+          if (append && boundaryDate) {
+            url.searchParams.set(direction === 'left' ? "end" : "start", boundaryDate);
+          }
+
+          try {
+            const response = await fetch(url);
+            const data = await response.json();
+            console.log("API data:", data);
+
+            const mappedData = mapKBarList(data);
+
+            console.log("mappedData:", mappedData);
+
+            if (append) {
+              if (direction === 'left') {
+                klineData.value = [...mappedData, ...klineData.value];
+                selectedIndex.value += mappedData.length;
+              } else {
+                klineData.value = [...klineData.value, ...mappedData];
+              }
+            } else {
+              klineData.value = mappedData;
+              selectedIndex.value = -1;
+              selected.value = null;
+            }
+            candleSeries.setData(klineData.value);
+          } catch (err) {
+            console.error("Fetch failed:", err);
+          }
+        };
+
+        const handleEnter = () => {
+          showFloat.value = false;
+          loadData();
+        };
+
+        const highlightCandle = (index) => {
+          if (index < 0 || index >= klineData.value.length) return;
+          const point = klineData.value[index];
+          selected.value = point;
+          candleSeries.setMarkers([{
+            time: point.time,
+            position: 'aboveBar',
+            color: 'blue',
+            shape: 'arrowDown',
+            text: '选中'
+          }]);
+        };
+
+        onMounted(() => {
+          const chart = LightweightCharts.createChart(document.getElementById('chart'), {
+            layout: { background: { color: '#ffffff' }, textColor: '#000' },
+            grid: { vertLines: { color: '#eee' }, horzLines: { color: '#eee' } },
+            timeScale: { timeVisible: true },
+            priceScale: { borderVisible: false },
+          });
+          candleSeries = chart.addCandlestickSeries();
+          loadData();
+
+          window.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowLeft') {
+              if (selectedIndex.value > 0) {
+                selectedIndex.value--;
+              } else {
+                loadData(true, 'left');
+              }
+            } else if (e.key === 'ArrowRight') {
+              if (selectedIndex.value < klineData.value.length - 1) {
+                selectedIndex.value++;
+              } else {
+                loadData(true, 'right');
+              }
+            }
+          });
+        });
+
+        watch(selectedIndex, (newIndex) => {
+          highlightCandle(newIndex);
+        });
+
+        return {
+          inputSymbol,
+          fullSymbolDisplay,
+          loadData,
+          handleEnter,
+          selected,
+          showFloat,
+          percentChange
+        };
+      }
+    }).mount('#app');
+  </script>
+</body>
+</html>
