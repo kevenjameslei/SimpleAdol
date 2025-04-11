@@ -99,7 +99,7 @@
         const selectedIndex = ref(-1);
         const selected = ref(null);
         const showFloat = ref(false);
-        const limit = ref(2);
+        const limit = ref(100);
         let candleSeries;
 
         function mapKBarList(rawList) {
@@ -145,9 +145,13 @@
 
           let boundaryDate = null;
           if (append && klineData.value.length > 0) {
-            boundaryDate = direction === 'left'
-              ? klineData.value[0].time
-              : klineData.value[klineData.value.length - 1].time;
+            if (direction === 'left') {
+              const firstTime = new Date(klineData.value[0].time);
+              firstTime.setDate(firstTime.getDate() - 1);
+              boundaryDate = firstTime.toISOString().split('T')[0];
+            } else {
+              boundaryDate = klineData.value[klineData.value.length - 1].time;
+            }
           }
 
           const url = new URL(`/api/kline/${fullSymbol.value}`, window.location.origin);
@@ -223,7 +227,7 @@
               if (selectedIndex.value < klineData.value.length - 1) {
                 selectedIndex.value++;
               } else {
-                loadData(true, 'right');
+                //loadData(false, 'right');
               }
             }
           });
